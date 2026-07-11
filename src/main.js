@@ -32,4 +32,11 @@ const app = createApp(App);
 app.provide("albumService", albumService);
 
 app.use(router);
+console.log(router.getRoutes());
+
+await router.isReady();
+
+console.log("currentRoute", router.currentRoute.value);
+console.log("matched", router.currentRoute.value.matched);
+
 app.mount("#app");
