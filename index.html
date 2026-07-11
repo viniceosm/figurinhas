@@ -95,6 +95,7 @@
       border-radius: 5px;
     }
   </style>
+  <script src="https://unpkg.com/html5-qrcode" defer></script>
 </head>
 <body>
 <main>
@@ -154,11 +155,34 @@
   </section>
 
 <section class="card">
-  <h2>Leitor de QR Code</h2>
-  <button id="abrirCamera">Abrir câmera</button>
-  <video id="video" autoplay playsinline style="width:100%;max-width:420px;margin-top:10px;border-radius:10px"></video>
-  <p class="muted">O conteúdo do QR será colocado no campo "Código atual". Requer Chrome/Edge com HTTPS ou arquivo local.</p>
-</section>
+    <h2>Leitor de QR Code</h2>
+    <p class="muted">O conteúdo lido será colocado automaticamente no campo <strong>Código atual</strong>.</p>
+
+    <div class="grid">
+      <div>
+        <h3>Câmera</h3>
+        <label for="cameraSelect">Escolha a câmera</label>
+        <select id="cameraSelect">
+          <option value="">Detectar automaticamente</option>
+        </select>
+
+        <div>
+          <button id="abrirCamera">Abrir câmera</button>
+          <button id="pararCamera" class="ghost" disabled>Parar câmera</button>
+        </div>
+
+        <div id="reader" style="width:100%;max-width:430px;margin-top:15px"></div>
+      </div>
+
+      <div>
+        <h3>Imagem ou print</h3>
+        <label for="arquivoQR">Selecione uma imagem</label>
+        <input type="file" id="arquivoQR" accept="image/*">
+        <button id="lerImagem" class="secondary">Ler QR da imagem</button>
+        <pre id="resultadoQR">Nenhum QR lido ainda.</pre>
+      </div>
+    </div>
+  </section>
 
 </main>
 
@@ -469,39 +493,116 @@ document.querySelector("#gerar").addEventListener("click", async () => {
   }
 });
 
-if ('BarcodeDetector' in window) {
-  let stream=null;
-  const detector=new BarcodeDetector({formats:['qr_code']});
-  async function scanLoop(){
-    const video=document.getElementById('video');
-    if(video.readyState>=2){
-      try{
-        const codes=await detector.detect(video);
-        if(codes.length){
-          document.getElementById('atual').value=codes[0].rawValue;
-          status('QR Code lido com sucesso.');
-          if(stream) stream.getTracks().forEach(t=>t.stop());
-          return;
-        }
-      }catch(e){}
-    }
-    requestAnimationFrame(scanLoop);
-  }
-  document.getElementById('abrirCamera').addEventListener('click',async()=>{
-    try{
-      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-      const video=document.getElementById('video');
-      video.srcObject=stream;
-      scanLoop();
-    }catch(e){
-      status('Não foi possível abrir a câmera: '+e.message,true);
-    }
-  });
-} else {
-  document.getElementById('abrirCamera')?.addEventListener('click',()=>{
-    status('BarcodeDetector não é suportado neste navegador.',true);
-  });
+
+
+let html5QrCode = null;
+let cameraAtiva = false;
+
+function preencherCodigoAtual(texto) {
+  const valor = String(texto || "").trim();
+  document.getElementById("atual").value = valor;
+  document.getElementById("resultadoQR").textContent = valor;
+  status("QR Code lido com sucesso.");
 }
+
+async function pararLeitorQR() {
+  if (!html5QrCode || !cameraAtiva) return;
+
+  try { await html5QrCode.stop(); } catch (_) {}
+  try { await html5QrCode.clear(); } catch (_) {}
+
+  cameraAtiva = false;
+  document.getElementById("abrirCamera").disabled = false;
+  document.getElementById("pararCamera").disabled = true;
+}
+
+async function carregarCameras() {
+  if (typeof Html5Qrcode === "undefined") return;
+
+  try {
+    const cameras = await Html5Qrcode.getCameras();
+    const select = document.getElementById("cameraSelect");
+    select.innerHTML = '<option value="">Detectar automaticamente</option>';
+
+    cameras.forEach((camera, indice) => {
+      const option = document.createElement("option");
+      option.value = camera.id;
+      option.textContent = camera.label || `Câmera ${indice + 1}`;
+      select.appendChild(option);
+    });
+  } catch (_) {
+    // Pode falhar antes de o usuário permitir acesso à câmera.
+  }
+}
+
+document.getElementById("abrirCamera").addEventListener("click", async () => {
+  if (typeof Html5Qrcode === "undefined") {
+    status("A biblioteca html5-qrcode não foi carregada. Verifique sua conexão.", true);
+    return;
+  }
+
+  try {
+    if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+
+    const cameraId = document.getElementById("cameraSelect").value;
+    const camera = cameraId || { facingMode: "environment" };
+
+    await html5QrCode.start(
+      camera,
+      {
+        fps: 12,
+        qrbox: { width: 250, height: 250 },
+        aspectRatio: 1
+      },
+      async decodedText => {
+        preencherCodigoAtual(decodedText);
+        await pararLeitorQR();
+      },
+      () => {}
+    );
+
+    cameraAtiva = true;
+    document.getElementById("abrirCamera").disabled = true;
+    document.getElementById("pararCamera").disabled = false;
+    status("Câmera aberta. Aponte para o QR Code.");
+    await carregarCameras();
+  } catch (erro) {
+    status("Não foi possível abrir a câmera: " + (erro.message || erro), true);
+  }
+});
+
+document.getElementById("pararCamera").addEventListener("click", async () => {
+  await pararLeitorQR();
+  status("Câmera parada.");
+});
+
+document.getElementById("lerImagem").addEventListener("click", async () => {
+  if (typeof Html5Qrcode === "undefined") {
+    status("A biblioteca html5-qrcode não foi carregada. Verifique sua conexão.", true);
+    return;
+  }
+
+  const arquivo = document.getElementById("arquivoQR").files?.[0];
+  if (!arquivo) {
+    status("Selecione uma imagem primeiro.", true);
+    return;
+  }
+
+  try {
+    await pararLeitorQR();
+    const leitorImagem = new Html5Qrcode("reader");
+    const texto = await leitorImagem.scanFile(arquivo, true);
+    preencherCodigoAtual(texto);
+    try { await leitorImagem.clear(); } catch (_) {}
+  } catch (erro) {
+    status("Nenhum QR Code foi encontrado nessa imagem.", true);
+  }
+});
+
+window.addEventListener("load", carregarCameras);
+window.addEventListener("beforeunload", () => {
+  if (cameraAtiva && html5QrCode) html5QrCode.stop().catch(() => {});
+});
 
 </script>
 </body>
