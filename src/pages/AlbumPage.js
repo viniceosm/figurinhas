@@ -4,120 +4,99 @@ import {
     ref
 } from "vue";
 
-export const AlbumsPage = {
+import {
+    useRoute
+} from "vue-router";
+
+export const AlbumPage = {
     setup() {
+        const route = useRoute();
         const albumService = inject("albumService");
 
-        const albums = ref([]);
-        const newAlbumName = ref("");
+        const album = ref(null);
         const loading = ref(true);
 
-        async function loadAlbums() {
-            loading.value = true;
-
+        onMounted(async () => {
             try {
-                albums.value = await albumService.listAlbums();
+                album.value = await albumService.getAlbum(
+                    route.params.id
+                );
             } finally {
                 loading.value = false;
             }
-        }
-
-        async function createAlbum() {
-            const name = newAlbumName.value.trim();
-
-            if (!name) {
-                return;
-            }
-
-            await albumService.createAlbum(name, 980);
-
-            newAlbumName.value = "";
-            await loadAlbums();
-        }
-
-        onMounted(loadAlbums);
+        });
 
         return {
-            albums,
-            newAlbumName,
-            loading,
-            createAlbum
+            album,
+            loading
         };
     },
 
     template: `
         <section>
-            <div class="page-heading">
-                <div>
-                    <h1>Meus Álbuns</h1>
-                    <p>Gerencie suas coleções e encontre trocas.</p>
-                </div>
-            </div>
+            <p v-if="loading">Carregando...</p>
 
-            <form
-                class="new-album"
-                @submit.prevent="createAlbum"
-            >
-                <input
-                    v-model="newAlbumName"
-                    placeholder="Nome do álbum"
-                >
+            <div v-else-if="album">
+                <header class="album-heading">
+                    <div>
+                        <router-link to="/">
+                            ← Meus álbuns
+                        </router-link>
 
-                <button type="submit">
-                    Criar álbum
-                </button>
-            </form>
-
-            <p v-if="loading">
-                Carregando...
-            </p>
-
-            <div v-else-if="albums.length" class="album-grid">
-                <article
-                    v-for="album in albums"
-                    :key="album.id"
-                    class="album-card"
-                >
-                    <h2>⚽ {{ album.name }}</h2>
-
-                    <div class="progress">
-                        <div
-                            class="progress-value"
-                            :style="{
-                                width:
-                                    (
-                                        album.statistics.pasted /
-                                        album.statistics.total *
-                                        100
-                                    ) + '%'
-                            }"
-                        ></div>
+                        <h1>⚽ {{ album.name }}</h1>
                     </div>
+                </header>
 
-                    <strong>
-                        {{ album.statistics.pasted }}
-                        /
-                        {{ album.statistics.total }}
-                    </strong>
+                <div class="statistics">
+                    <article>
+                        <span>Coladas</span>
+                        <strong>
+                            {{ album.statistics.pasted }}
+                        </strong>
+                    </article>
 
-                    <p>
-                        {{ album.statistics.duplicates }}
-                        repetidas
-                    </p>
+                    <article>
+                        <span>Faltantes</span>
+                        <strong>
+                            {{ album.statistics.missing }}
+                        </strong>
+                    </article>
 
+                    <article>
+                        <span>Repetidas</span>
+                        <strong>
+                            {{ album.statistics.duplicates }}
+                        </strong>
+                    </article>
+                </div>
+
+                <nav class="album-actions">
                     <router-link
-                        :to="'/album/' + album.id"
+                        :to="'/album/' + album.id + '/editar'"
                         class="button"
                     >
-                        Abrir álbum
+                        Gerenciar figurinhas
                     </router-link>
-                </article>
+
+                    <router-link
+                        :to="'/album/' + album.id + '/escanear'"
+                        class="button"
+                    >
+                        Escanear QR
+                    </router-link>
+
+                    <router-link
+                        :to="'/album/' + album.id + '/comparar'"
+                        class="button"
+                    >
+                        Comparar com colecionador
+                    </router-link>
+                </nav>
             </div>
 
-            <div v-else class="empty-state">
-                <h2>Nenhum álbum cadastrado</h2>
-                <p>Crie seu primeiro álbum para começar.</p>
-            </div>
+            <p v-else>
+                Álbum não encontrado.
+            </p>
         </section>
     `
 };
