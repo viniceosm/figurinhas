@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Decodificador Figuritas</title>
+  <style>
+    :root {
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light dark;
+    }
+    body {
+      margin: 0;
+      background: #111827;
+      color: #f9fafb;
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 { margin-bottom: 6px; }
+    .subtitle { color: #9ca3af; margin-top: 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit,minmax(300px,1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+    textarea, input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #4b5563;
+      border-radius: 9px;
+      padding: 11px;
+      background: #111827;
+      color: #f9fafb;
+      font: inherit;
+    }
+    textarea { min-height: 105px; resize: vertical; }
+    button {
+      border: 0;
+      border-radius: 9px;
+      padding: 11px 15px;
+      font-weight: 800;
+      cursor: pointer;
+      background: #22c55e;
+      color: #052e16;
+      margin-right: 8px;
+      margin-top: 10px;
+    }
+    button.secondary {
+      background: #60a5fa;
+      color: #172554;
+    }
+    button.ghost {
+      background: #374151;
+      color: #f9fafb;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0b1020;
+      border-radius: 10px;
+      padding: 14px;
+      overflow: auto;
+    }
+    .ok { color: #86efac; }
+    .error { color: #fca5a5; }
+    .muted { color: #9ca3af; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      text-align: left;
+      padding: 9px;
+      border-bottom: 1px solid #374151;
+    }
+    code {
+      background: #111827;
+      padding: 2px 5px;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Decodificador do código Figuritas</h1>
+  <p class="subtitle">
+    Lê os dois bitmaps GZIP + Base64, compara estados e identifica as posições alteradas.
+  </p>
+
+  <section class="card">
+    <div class="grid">
+      <div>
+        <label for="anterior">Código anterior</label>
+        <textarea id="anterior" placeholder="Cole o código anterior aqui"></textarea>
+      </div>
+      <div>
+        <label for="atual">Código atual</label>
+        <textarea id="atual" placeholder="Cole o código atual aqui"></textarea>
+      </div>
+    </div>
+    <button id="comparar">Comparar códigos</button>
+    <button id="analisar" class="secondary">Analisar somente o atual</button>
+    <button id="trocar" class="ghost">Atual vira anterior</button>
+  </section>
+
+  <section class="card">
+    <h2>Resultado</h2>
+    <div id="status" class="muted">Aguardando código...</div>
+    <div id="resumo"></div>
+    <div id="mudancas"></div>
+    <div id="marcadas"></div>
+  </section>
+
+  <section class="card">
+    <h2>Gerar código por posições globais</h2>
+    <p class="muted">
+      Informe as posições marcadas como coladas, começando em 0. Exemplo:
+      <code>0, 1, 5, 15, 319</code>.
+    </p>
+    <label for="posicoes">Posições coladas</label>
+    <input id="posicoes" placeholder="0, 1, 5, 15">
+    <button id="gerar">Gerar código</button>
+    <pre id="codigoGerado"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Mapa conhecido do começo do álbum</h2>
+    <table>
+      <thead>
+        <tr><th>Faixa global</th><th>Categoria</th><th>Numeração exibida</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>0–4</td><td>FWC Especiais</td><td>00–04</td></tr>
+        <tr><td>5–8</td><td>FWC Bola e Países</td><td>1–4</td></tr>
+        <tr><td>9–19</td><td>FWC História</td><td>09–19</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+<section class="card">
+  <h2>Leitor de QR Code</h2>
+  <button id="abrirCamera">Abrir câmera</button>
+  <video id="video" autoplay playsinline style="width:100%;max-width:420px;margin-top:10px;border-radius:10px"></video>
+  <p class="muted">O conteúdo do QR será colocado no campo "Código atual". Requer Chrome/Edge com HTTPS ou arquivo local.</p>
+</section>
+
+</main>
+
+<script>
+const TOTAL_FIGURINHAS = 980;
+const TOTAL_BYTES = Math.ceil(TOTAL_FIGURINHAS / 8); // 123
+
+function limparCodigo(valor) {
+  return valor.trim().replace(/\s+/g, "");
+}
+
+function separarCodigo(codigo) {
+  const limpo = limparCodigo(codigo).replace(/^⋋~/u, "");
+  const partes = limpo.split(";");
+  if (partes.length !== 2) {
+    throw new Error("O código precisa possuir dois blocos separados por ponto e vírgula.");
+  }
+  return partes;
+}
+
+function base64ParaBytes(base64) {
+  const binario = atob(base64);
+  const bytes = new Uint8Array(binario.length);
+  for (let i = 0; i < binario.length; i++) {
+    bytes[i] = binario.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function bytesParaBase64(bytes) {
+  let binario = "";
+  const bloco = 0x8000;
+  for (let i = 0; i < bytes.length; i += bloco) {
+    binario += String.fromCharCode(...bytes.subarray(i, i + bloco));
+  }
+  return btoa(binario);
+}
+
+async function descompactarGzip(base64) {
+  if (!("DecompressionStream" in window)) {
+    throw new Error("Este navegador não possui suporte a DecompressionStream.");
+  }
+
+  const compactado = base64ParaBytes(base64);
+  const stream = new Blob([compactado])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"));
+
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+async function compactarGzip(bytes) {
+  if (!("CompressionStream" in window)) {
+    throw new Error("Este navegador não possui suporte a CompressionStream.");
+  }
+
+  const stream = new Blob([bytes])
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
+
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+async function decodificar(codigo) {
+  const [coladasBase64, repetidasBase64] = separarCodigo(codigo);
+  const coladas = await descompactarGzip(coladasBase64);
+  const repetidas = await descompactarGzip(repetidasBase64);
+
+  if (coladas.length !== TOTAL_BYTES || repetidas.length !== TOTAL_BYTES) {
+    throw new Error(
+      `Tamanho inesperado: coladas=${coladas.length} bytes, repetidas=${repetidas.length} bytes.`
+    );
+  }
+
+  return { coladas, repetidas };
+}
+
+function bit(bytes, posicao) {
+  const byteIndex = Math.floor(posicao / 8);
+  const bitIndex = posicao % 8;
+  return (bytes[byteIndex] >> bitIndex) & 1;
+}
+
+function definirBit(bytes, posicao, valor) {
+  const byteIndex = Math.floor(posicao / 8);
+  const bitIndex = posicao % 8;
+
+  if (valor) {
+    bytes[byteIndex] |= (1 << bitIndex);
+  } else {
+    bytes[byteIndex] &= ~(1 << bitIndex);
+  }
+}
+
+function descreverPosicao(posicao) {
+  if (posicao >= 0 && posicao <= 4) {
+    return `FWC Especiais ${String(posicao).padStart(2, "0")}`;
+  }
+
+  if (posicao >= 5 && posicao <= 8) {
+    return `FWC Bola e Países ${posicao - 4}`;
+  }
+
+  if (posicao >= 9 && posicao <= 19) {
+    return `FWC História ${String(posicao).padStart(2, "0")}`;
+  }
+
+  return `posição global ${posicao}`;
+}
+
+function listarColadas(bytes) {
+  const resultado = [];
+  for (let posicao = 0; posicao < TOTAL_FIGURINHAS; posicao++) {
+    // No primeiro bitmap: 1 = faltando, 0 = colada.
+    if (bit(bytes, posicao) === 0) {
+      resultado.push(posicao);
+    }
+  }
+  return resultado;
+}
+
+function listarRepetidas(bytes) {
+  const resultado = [];
+  for (let posicao = 0; posicao < TOTAL_FIGURINHAS; posicao++) {
+    // No segundo bitmap: 1 = repetida, 0 = sem repetida.
+    if (bit(bytes, posicao) === 1) {
+      resultado.push(posicao);
+    }
+  }
+  return resultado;
+}
+
+function compararBitmaps(antes, depois, tipo) {
+  const mudancas = [];
+
+  for (let posicao = 0; posicao < TOTAL_FIGURINHAS; posicao++) {
+    const valorAntes = bit(antes, posicao);
+    const valorDepois = bit(depois, posicao);
+
+    if (valorAntes === valorDepois) continue;
+
+    let acao;
+    if (tipo === "coladas") {
+      acao = valorDepois === 0 ? "marcada como colada" : "desmarcada";
+    } else {
+      acao = valorDepois === 1 ? "marcada como repetida" : "repetida removida";
+    }
+
+    mudancas.push({
+      posicao,
+      byte: Math.floor(posicao / 8),
+      bit: posicao % 8,
+      antes: valorAntes,
+      depois: valorDepois,
+      acao
+    });
+  }
+
+  return mudancas;
+}
+
+function renderizarResumo(decodificado) {
+  const coladas = listarColadas(decodificado.coladas);
+  const repetidas = listarRepetidas(decodificado.repetidas);
+  const faltantes = TOTAL_FIGURINHAS - coladas.length;
+
+  document.querySelector("#resumo").innerHTML = `
+    <p>
+      <strong>Total:</strong> ${TOTAL_FIGURINHAS}<br>
+      <strong>Coladas:</strong> ${coladas.length}<br>
+      <strong>Faltantes:</strong> ${faltantes}<br>
+      <strong>Repetidas:</strong> ${repetidas.length}
+    </p>
+  `;
+
+  document.querySelector("#marcadas").innerHTML = `
+    <h3>Figurinhas coladas</h3>
+    <pre>${coladas.length
+      ? coladas.map(p => `${p}: ${descreverPosicao(p)}`).join("\n")
+      : "Nenhuma figurinha colada."}</pre>
+
+    <h3>Figurinhas repetidas</h3>
+    <pre>${repetidas.length
+      ? repetidas.map(p => `${p}: ${descreverPosicao(p)}`).join("\n")
+      : "Nenhuma repetida."}</pre>
+  `;
+}
+
+function renderizarMudancas(coladas, repetidas) {
+  const todas = [
+    ...coladas.map(m => ({...m, tipo: "Coladas"})),
+    ...repetidas.map(m => ({...m, tipo: "Repetidas"}))
+  ];
+
+  if (!todas.length) {
+    document.querySelector("#mudancas").innerHTML =
+      "<h3>Mudanças</h3><p>Nenhuma diferença encontrada.</p>";
+    return;
+  }
+
+  document.querySelector("#mudancas").innerHTML = `
+    <h3>Mudanças encontradas</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Posição</th>
+          <th>Descrição</th>
+          <th>Byte</th>
+          <th>Bit</th>
+          <th>Ação</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${todas.map(m => `
+          <tr>
+            <td>${m.tipo}</td>
+            <td>${m.posicao}</td>
+            <td>${descreverPosicao(m.posicao)}</td>
+            <td>${m.byte}</td>
+            <td>${m.bit}</td>
+            <td>${m.acao}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function status(texto, erro = false) {
+  const el = document.querySelector("#status");
+  el.textContent = texto;
+  el.className = erro ? "error" : "ok";
+}
+
+document.querySelector("#analisar").addEventListener("click", async () => {
+  try {
+    const atual = await decodificar(document.querySelector("#atual").value);
+    renderizarResumo(atual);
+    document.querySelector("#mudancas").innerHTML = "";
+    status("Código atual decodificado com sucesso.");
+  } catch (erro) {
+    status(erro.message, true);
+  }
+});
+
+document.querySelector("#comparar").addEventListener("click", async () => {
+  try {
+    const anterior = await decodificar(document.querySelector("#anterior").value);
+    const atual = await decodificar(document.querySelector("#atual").value);
+
+    const mudancasColadas = compararBitmaps(anterior.coladas, atual.coladas, "coladas");
+    const mudancasRepetidas = compararBitmaps(anterior.repetidas, atual.repetidas, "repetidas");
+
+    renderizarResumo(atual);
+    renderizarMudancas(mudancasColadas, mudancasRepetidas);
+    status("Comparação concluída.");
+  } catch (erro) {
+    status(erro.message, true);
+  }
+});
+
+document.querySelector("#trocar").addEventListener("click", () => {
+  const anterior = document.querySelector("#anterior");
+  const atual = document.querySelector("#atual");
+  anterior.value = atual.value;
+  atual.value = "";
+  status("O código atual foi movido para o campo anterior.");
+});
+
+document.querySelector("#gerar").addEventListener("click", async () => {
+  try {
+    const texto = document.querySelector("#posicoes").value.trim();
+    const posicoes = texto
+      ? texto.split(",").map(v => Number(v.trim()))
+      : [];
+
+    if (posicoes.some(v => !Number.isInteger(v) || v < 0 || v >= TOTAL_FIGURINHAS)) {
+      throw new Error(`Todas as posições devem ser inteiras entre 0 e ${TOTAL_FIGURINHAS - 1}.`);
+    }
+
+    // Primeiro bitmap começa com todos os 980 bits úteis em 1 = faltando.
+    const coladas = new Uint8Array(TOTAL_BYTES).fill(0xFF);
+
+    // Os 4 bits de preenchimento finais ficam em 0.
+    for (let p = TOTAL_FIGURINHAS; p < TOTAL_BYTES * 8; p++) {
+      definirBit(coladas, p, 0);
+    }
+
+    // Cada posição informada vira 0 = colada.
+    for (const p of new Set(posicoes)) {
+      definirBit(coladas, p, 0);
+    }
+
+    // Segundo bitmap: tudo 0 = sem repetidas.
+    const repetidas = new Uint8Array(TOTAL_BYTES);
+
+    const gzipColadas = await compactarGzip(coladas);
+    const gzipRepetidas = await compactarGzip(repetidas);
+
+    const codigo = `⋋~${bytesParaBase64(gzipColadas)};${bytesParaBase64(gzipRepetidas)}`;
+    document.querySelector("#codigoGerado").textContent = codigo;
+    status("Código gerado com sucesso.");
+  } catch (erro) {
+    status(erro.message, true);
+  }
+});
+
+if ('BarcodeDetector' in window) {
+  let stream=null;
+  const detector=new BarcodeDetector({formats:['qr_code']});
+  async function scanLoop(){
+    const video=document.getElementById('video');
+    if(video.readyState>=2){
+      try{
+        const codes=await detector.detect(video);
+        if(codes.length){
+          document.getElementById('atual').value=codes[0].rawValue;
+          status('QR Code lido com sucesso.');
+          if(stream) stream.getTracks().forEach(t=>t.stop());
+          return;
+        }
+      }catch(e){}
+    }
+    requestAnimationFrame(scanLoop);
+  }
+  document.getElementById('abrirCamera').addEventListener('click',async()=>{
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      const video=document.getElementById('video');
+      video.srcObject=stream;
+      scanLoop();
+    }catch(e){
+      status('Não foi possível abrir a câmera: '+e.message,true);
+    }
+  });
+} else {
+  document.getElementById('abrirCamera')?.addEventListener('click',()=>{
+    status('BarcodeDetector não é suportado neste navegador.',true);
+  });
+}
+
+</script>
+</body>
+</html>
